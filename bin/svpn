@@ -1,0 +1,93 @@
+#!/bin/sh
+"exec" "`dirname $0`/../venv/bin/python" "$0" "$@"
+
+import argparse
+from sys import stdout
+import keyring
+import os
+import pathlib
+import signal
+import subprocess
+import yaml
+from halo import Halo
+
+
+def connect_openconnect(name, url, authgroup, user, password, certificate, key_password):
+    # ensure sudo
+    subprocess.run(['sudo', 'id'], stdout=subprocess.PIPE)
+
+    cmd = [
+        'sudo',
+        'openconnect',
+        '--authgroup', authgroup,
+        '--user', user,
+        '--certificate', certificate,
+        '--key-password', key_password,
+        url
+    ]
+    try:
+        p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p.stdin.write(password.encode() + b'\n')
+        p.stdin.flush()
+
+        with Halo(text=f'Connecting to {name}...', text_color='blue', spinner='circleHalves'):
+            connected = False
+            while not connected:
+                output = p.stdout.readline()
+                if output == '' and p.poll() is not None:
+                    print('\n'.join([x.decode() for x in p.stdout.readlines()]))
+                    print('\n'.join([x.decode() for x in p.stderr.readlines()]))
+                    break
+                if b'Established DTLS connection' in output:
+                    connected = True
+
+        with Halo(text=f'Connected to {name}', text_color='green', spinner='dots'):
+            p.wait()
+            print(''.join([x.decode() for x in p.stdout.readlines()]))
+            print(''.join([x.decode() for x in p.stderr.readlines()]))
+
+    except KeyboardInterrupt:
+        p.send_signal(signal.SIGINT)
+
+
+def get_profiles():
+    return keyring.get_password('svpn', 'profiles')
+
+
+def edit_profiles():
+    tmp_file = '/tmp/__svpn__profiles'
+    profiles = keyring.get_password('svpn', 'profiles')
+    with open(tmp_file, 'w') as f:
+        f.write('' if profiles is None else profiles)
+    subprocess.run(['nano', tmp_file])
+    with open(tmp_file, 'r') as f:
+        profiles_updated = f.read()
+    keyring.set_password('svpn', 'profiles', profiles_updated)
+    os.remove(tmp_file)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='VPN Management on CLI')
+    parser.add_argument('--list', action='store_true', help='list vpn profiles')
+    parser.add_argument('--edit', action='store_true', help='list vpn profiles')
+    parser.add_argument('profile', nargs='?', help='vpn profile')
+    args = parser.parse_args()
+
+    if args.list:
+        profiles = get_profiles()
+        print(profiles)
+    elif args.edit:
+        edit_profiles()
+    else:
+        profiles = yaml.safe_load(keyring.get_password('svpn', 'profiles'))
+        profile = args.profile if args.profile else profiles.get('default_env')
+        profile_data = profiles.get('environments', {}).get(profile)
+        connect_openconnect(
+            name=profile,
+            url=profile_data.get('url'),
+            authgroup=profile_data.get('authgroup'),
+            user=profile_data.get('user'),
+            password=profile_data.get('password'),
+            certificate=str(pathlib.Path(pathlib.Path.home(), '.svpn', 'certs', profile_data.get("certificate"))),
+            key_password=profile_data.get('key_password'),
+        )

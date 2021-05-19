@@ -1,0 +1,10 @@
+colorama==0.4.4
+halo==0.0.31
+importlib-metadata==4.0.1
+keyring==23.0.1
+log-symbols==0.0.14
+PyYAML==5.4.1
+six==1.16.0
+spinners==0.0.24
+termcolor==1.1.0
+zipp==3.4.1
